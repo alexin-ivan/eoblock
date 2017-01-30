@@ -1,0 +1,130 @@
+.TH iface0 8 "2017 FEB 1" "alexin.ivan@gmail.com" "User Commands"
+
+.SH NAME
+iface0 \- Utility to manage eoblock fs.
+.SH SYNOPSIS
+
+.LP
+.nf
+.BI "iface0 init [-v] [-F] -c <nodes-count> [-V <size> ] [-P <size>] <device>"
+.fi
+
+.LP
+.nf
+.BI "iface0 deinit [-v] <device>"
+.fi
+
+.LP
+.nf
+.BI "iface0 add [-v] [-F] -n <node-id> -i <ip>  <device>"
+.fi
+
+.LP
+.nf
+.BI "iface0 remove [-v] -n <node-id> <device>"
+.fi
+
+.LP
+.nf
+.BI "iface0 send [-v] [-F] [-a] -s <node-id> -d <node-id> -f <file> <device>"
+.fi
+
+.LP
+.nf
+.BI "iface0 recv [-v] [-F] [-a] [-w] -s <node-id>  -f <file> <device>"
+.fi
+
+.LP
+.nf
+.BI "iface0 dump [-v] [-j] <device>"
+.fi
+
+.SH DESCRIPTION
+Эта утилита позволяет управлять в userspace компонентами \fIeoblock\fR.
+
+.SH OPTIONS
+
+.HP
+.BI "iface0 init [-v] [-F] [-c <nodes-count>] [-V <size> ] [-P <size>] <device>"
+.IP
+Эта команда инииализирует заголовок с описанием макс. кол-ва узлов (-c), размера блока для узла (-V), размера сектора (-P, актуально только для файлов).
+
+.HP
+.BI "iface0 deinit [-v] <device>"
+.IP
+Эта команда стирает заголовок с описанием информации о eoblock.
+
+.HP
+.BI "iface0 send [-vFa] -s <node-id> -d <node-id> -f <file> <device>"
+.IP
+Эта команда позволяет записать данные в блок соответствующего узла кластера.
+Номера узла исходного и узла назначения задаются опциями -s и -d.
+Опция -f принимает на вход либо путь к файлу, либо \fB-\fR чтение из стандартного потока ввода.
+Устройство также может быть задано в виде файла или "-". Параметр '-a' указывается, если необходимо дождаться ответа (\fBACK\fR).
+
+.HP
+.BI "iface0 recv [-vFaw] -s <node-id>  -f <file> <device>"
+.IP
+Команда для чтения данных блока заданного узла (-s) в файл (-f) или в stdout (-f -).
+Флаг -a означает, что по получении необходимо записать отчёт о доставке получателю (\fBACK\fR). 
+Флаг -w означает, что нужно записать ноль в блок узла и ждать ненулевого сообщения.
+
+.HP
+.BI "iface0 add [-v] [-F] -n <node-id> -i <ip>  <device>"
+.IP
+Команда для добавления узла (-n) с IP (-i) в устройстве <device>.
+.HP
+.BI "iface0 remove [-v] -n <node-id> <device>"
+.IP
+Команда для удаления узла (-n) из устройства <device>.
+
+.HP
+.BI "iface0 dump [-v] [-j] <device>"
+.IP
+Команда для получения содержимого заголовока eoblock с устройства. Опция -j выдаёт результат в JSON-формате.
+
+.SH EXAMPLES
+
+.HP
+.BI "dd if=/dev/zero of=/tmp/eoblock bs=1M count=10"
+.IP
+Создадим файл, через который будут общаться узлы.
+
+.HP
+.BI "iface init -c 32 -V 512 -P 512 /tmp/eoblock"
+.IP
+Инициализируем на устройстве (файле) заголовок,
+в котором будет указано, что можно добавлять в
+кластер не более 32 узлов, размер блока узла равен
+физическому блоку - 512 байт.
+
+.HP
+.BI "iface add -n 0 -i 192.168.1.1 /tmp/eoblock"
+.IP
+Добавим узел 0.
+
+.HP
+.BI "iface add -n 1 -i 192.168.1.2 /tmp/eoblock"
+.IP
+Добавим узел 1.
+
+.HP
+.BI "iface recv -a -w -s 1 -f - /tmp/eoblock"
+.IP
+Запускаем чтение из устройства.
+Как только будет получен ответ,
+он будет выведен на экран, а
+отправителю будет отправлен
+отчёт о доставке.
+
+.HP
+.BI "echo 'Hello!' | iface send -a -s 0 -d 1 -f - /tmp/eoblock"
+.IP
+Записать сообщение для узла 1 от имени узла 0, и
+дождаться подтверждения о доставке сообщения.
+
+.HP
+.BI "iface deinit /tmp/eoblock"
+.IP
+Очистим заголовок.
+
