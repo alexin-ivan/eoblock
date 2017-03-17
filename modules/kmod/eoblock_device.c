@@ -26,20 +26,34 @@
 #define CONFIG_X86_L1_CACHE_SHIFT 6
 #endif
 
-int eob_log_dummy(int prio, const char *fmt, ...);
-#define EOB_LOG(X, args...) eob_log_dummy(X, args...)
+/*typedef unsigned fmode_t;*/
+
+//int eob_log_dummy(char prio, const char *fmt, ...);
+//#define EOB_LOG(X, FMT, args...) eob_log_dummy(X, FMT, args)
+
+int eob_log_init();
+void eob_log_deinit();
+
+typedef _Bool bool;
+
+/*struct sockaddr {};*/
 
 #endif
 
 /******************************************************************************/
+#include "eoblock_device.h"
+#define EOB_MODULE_NAME "eob_device: "
+#include "eoblock_debug.h"
+#include <linux/socket.h>
+#include <linux/types.h>
 #include <linux/kernel.h>
 #include <linux/module.h>
 #include <linux/init.h>
-#include <linux/etherdevice.h>
-#include <linux/netdevice.h>
 #include <linux/version.h>
 #include <linux/rbtree.h>
+#include <linux/netdevice.h>
 
+#include <linux/etherdevice.h>
 #include <linux/percpu.h>
 #include <linux/fs.h>
 #include <linux/err.h>
@@ -58,6 +72,8 @@ int eob_log_dummy(int prio, const char *fmt, ...);
 #include <eoblock.h>
 #include <sys/eob_debug.h>
 
+#include <stddef.h>
+
 #if (LINUX_VERSION_CODE < KERNEL_VERSION(3,19,0)) &&  (LINUX_VERSION_CODE > KERNEL_VERSION(3,16,0))
 #define eob_alloc_netdev alloc_netdev
 #elif (LINUX_VERSION_CODE > KERNEL_VERSION(3,19,0)) 
@@ -65,10 +81,22 @@ int eob_log_dummy(int prio, const char *fmt, ...);
             alloc_netdev(sizeof_priv, name, NET_NAME_ENUM, setup)
 #endif
 
-typedef struct eob_device edev_t;
+#define K_ASSERT(X) 
+#define TRACE_DBG(X, args...)
 
-#define MAX_EOB_DEVICES 32
+/******************************************************************************/
+struct eob_device {
+    struct net_device *ndev;
+    char name[256];
+    char path[PATH_MAX];
+    struct eob_hw_addr addr;
+    struct block_device *bdev;
+    struct file *fd;
+    uint64_t sectors;
+    spinlock_t lock;
+};
 
+#if 0
 struct eob_device {
     struct net_device *ndev;
     spinlock_t lock;
@@ -78,23 +106,10 @@ struct eob_device {
     struct block_device *bdev;       /* Associated blk device */
     uint64_t sectors;
 };
-
-struct eob_ctx {
-    struct eob_device *devices[MAX_EOB_DEVICES];
-    spinlock_t lock;
-};
-
+#endif // 0
 /******************************************************************************/
 #define	VDEV_HOLDER			((void *)0x2401de8)
 static void *dev_holder = VDEV_HOLDER;
-
-static struct eob_ctx *eob_ctx = NULL;
-
-char *df_dev_path = "/dev/sdcxxx";
-module_param(df_dev_path, charp, 0644);
-
-int df_node_id = 0;
-module_param(df_node_id, int, 0);
 
 /******************************************************************************/
 int eob_panic(const char *file, const char *func, int line, const char *fmt, ...)
@@ -104,6 +119,39 @@ int eob_panic(const char *file, const char *func, int line, const char *fmt, ...
 }
 
 /******************************************************************************/
+static int eoblock_o_direct = 1;
+
+/* Returns fd, use IS_ERR(fd) to get error status */
+static int eob_open_fd(struct eob_device *dev)
+{
+	int open_flags = 0;
+	struct file *fd;
+    const char *name = dev->path;
+
+
+	open_flags = O_RDWR | O_DSYNC;
+
+	if (eoblock_o_direct)
+		open_flags |= O_DIRECT;
+
+	TRACE_DBG("Opening file %s, flags 0x%x", name, open_flags);
+
+	fd = filp_open(name, O_LARGEFILE | open_flags, 0600);
+
+	if (IS_ERR(fd)) {
+		if (PTR_ERR(fd) == -EMEDIUMTYPE)
+			EOB_LOG(EOB_ERR, "Unable to open %s with EMEDIUMTYPE, DRBD passive?", name);
+		else
+			EOB_LOG(EOB_ERR, "filp_open(%s) failed: %d", name, (int) PTR_ERR(fd));
+        return PTR_ERR(fd);
+	}
+
+    dev->fd = fd;
+
+	return (0);
+}
+
+__attribute__((unused))
 static int eob_open_blk(struct eob_device *dev, const char *path)
 {
     fmode_t mode = FMODE_READ | FMODE_WRITE | FMODE_EXCL;
@@ -166,17 +214,26 @@ void eob_close_blk(struct eob_device *dev)
     blkdev_put(dev->bdev, mode);
 }
 
+void eob_close_fd(struct eob_device *dev)
+{
+	filp_close(dev->fd, NULL);
+}
 
 /******************************************************************************/
-int eob_device_open(struct net_device *ndev)
+int eob_net_device_open(struct net_device *ndev)
 {
     struct eob_device *dev = netdev_priv(ndev);
     int result;
 
-    if((result = eob_open_blk(dev, dev->path))) {
-        EOB_LOG(EOB_ERR, "%s", "Unable to open blk device");
+    if (0 != (result = eob_open_fd(dev))) {
+        EOB_LOG(EOB_ERR, "Unable to open file");
         return SET_CERR(-ENODEV);
     }
+
+    /*if((result = eob_open_blk(dev, dev->path))) {*/
+        /*EOB_LOG(EOB_ERR, "%s", "Unable to open blk device");*/
+        /*return SET_CERR(-ENODEV);*/
+    /*}*/
 
     return (0);
 }
@@ -185,13 +242,14 @@ int eob_device_open(struct net_device *ndev)
 int eob_device_release(struct net_device *ndev)
 {
     struct eob_device *dev = netdev_priv(ndev);
-    eob_close_blk(dev);
+    eob_close_fd(dev);
+    /*eob_close_blk(dev);*/
     return (0);
 }
 
 /******************************************************************************/
 static const struct net_device_ops eob_device_ops = {
-	.ndo_open            = eob_device_open,
+	.ndo_open            = eob_net_device_open,
 	.ndo_stop            = eob_device_release,
     /*.ndo_start_xmit      = ioscsi_tx,*/
 	/*.ndo_do_ioctl        = ioscsi_ioctl,*/
@@ -219,19 +277,55 @@ void eob_device_ctor(struct net_device *dev)
     // netif_napi_add(dev, &priv->napi, snull_poll,2);
     spin_lock_init(&priv->lock);
     /*ioscsi_rx_ints(dev, 1);		[> enable receive interrupts <]*/
-
 }
 
 /******************************************************************************/
 void eob_device_dtor(struct net_device *dev);
 
 /******************************************************************************/
-int add_eob_device_impl(const char *path, int node_id)
+int eob_device_open(const char *path, const char *pname, edev_t **pres)
 {
     int result;
     struct net_device *ndev;
     struct eob_device *dev;
+    
+    ndev = eob_alloc_netdev(sizeof(struct eob_device), pname, eob_device_ctor);
 
+    if (!ndev) {
+        NOMEMORY_TRACE("Allocate net device.");
+        return SET_CERR(-ENODEV);
+    }
+
+    dev = netdev_priv(ndev);
+
+    strcpy(dev->path, path);
+    strcpy(dev->name, pname);
+
+    if( (result = register_netdev(ndev))) {
+        free_netdev(ndev);
+        EOB_LOG(EOB_ERR, "%s", "Unable to register eoblock device");
+        return SET_CERR(-ENODEV);
+    }
+
+    EOB_LOG(EOB_INFO, "eoblock device %s (%s) initialized", ndev->name, dev->path);
+
+    *pres = dev;
+
+    return (0);
+}
+
+int eob_device_close(edev_t *dev)
+{
+        
+}
+
+/******************************************************************************/
+int add_eob_device_impl(const char *path, int node_id, struct eob_device **pres)
+{
+    int result;
+    struct net_device *ndev;
+    struct eob_device *dev;
+    
     ndev = eob_alloc_netdev(sizeof(struct eob_device), "eob%d", eob_device_ctor);
 
     if (!ndev) {
@@ -251,81 +345,18 @@ int add_eob_device_impl(const char *path, int node_id)
 
     EOB_LOG(EOB_INFO, "eoblock device %s (%s) initialized", ndev->name, dev->path);
 
-    eob_ctx->devices[node_id] = dev;
+    *pres = dev;
 
     return (0);
 }
 
 /******************************************************************************/
-int remove_eob_device_impl(int node_id)
+int remove_eob_device_impl(struct eob_device *dev)
 {
-    struct eob_device *dev = eob_ctx->devices[node_id];
     unregister_netdev(dev->ndev);
     free_netdev(dev->ndev);
     return (0);
 }
 
-/******************************************************************************/
-int remove_eob_device(int node_id)
-{
-    spin_lock(&eob_ctx->lock);
-    remove_eob_device_impl(node_id);
-    spin_unlock(&eob_ctx->lock);
-    return (0);
-}
-
-/******************************************************************************/
-int add_eob_device(const char *path, int node_id)
-{
-    int rv;
-    spin_lock(&eob_ctx->lock);
-    rv = add_eob_device_impl(path, node_id);
-    spin_unlock(&eob_ctx->lock);
-    return (rv);
-}
-
-/******************************************************************************/
-static int __init oeblock_init(void)
-{
-    eob_log_init();
-    eob_ctx = kcalloc(1, sizeof(*eob_ctx), GFP_KERNEL);
-    
-    if(!eob_ctx)
-        return SET_CERR(-ENOMEM);
-
-    spin_lock_init(&eob_ctx->lock);
-
-    EOB_LOG(KERN_INFO, "%s", "Module loaded");
-    return add_eob_device(df_dev_path, df_node_id);
-}
-
-/******************************************************************************/
-static void __exit oeblock_exit(void)
-{
-    remove_eob_device(df_node_id);
-    EOB_LOG(KERN_INFO, "%s", "Module unloaded");
-    kfree(eob_ctx);
-    eob_log_exit();
-}
-
-/******************************************************************************/
-int eob_log_init(void)
-{
-    return (0);
-}
-
-/******************************************************************************/
-void eob_log_exit(void)
-{
-
-}
-
-/******************************************************************************/
-#ifdef EOB_KERNEL
-module_init(oeblock_init);
-module_exit(oeblock_exit);
-
-MODULE_AUTHOR("Ivan Alechin");
-MODULE_DESCRIPTION("Ethernet over block device");
-MODULE_LICENSE("GPL");
-#endif
+EXPORT_SYMBOL(add_eob_device_impl);
+EXPORT_SYMBOL(remove_eob_device_impl);

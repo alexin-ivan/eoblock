@@ -34,7 +34,7 @@ typedef enum {
     EOB_DEBUG,
     EOB_INFO,
     EOB_CRIT,
-    EOB_WARING,
+    EOB_WARNING,
 } eob_log_lvl;
 
 /******************************************************************************/
@@ -78,12 +78,12 @@ typedef enum {
 #    define EOB_MSG(_PRIO, ...) EOB_LOGGER_WRITE_LOG_CONSOLE(_PRIO, MODULE, __VA_ARGS__)
 
 #else
+//#    define EOB_DEBUG KERN_DEBUG
+//#    define EOB_INFO  KERN_INFO
+//#    define EOB_ERR   KERN_ERR
 
-#    define EOB_DEBUG KERN_DEBUG
-#    define EOB_INFO  KERN_INFO
-#    define EOB_ERR   KERN_ERR
-
-#    define EOB_LOG(_PRIO, fmt, args...) printk(_PRIO "keob: " fmt "\n", ##args)
+#    define EOB_PK(_PRIO, ...) eoblock_printk(_PRIO, EOB_MODULE_NAME, __VA_ARGS__)
+#    define EOB_LOG(_PRIO, ...) eoblock_klog(_PRIO, EOB_MODULE_NAME, __VA_ARGS__)
 #    define EOB_MSG(__PRIO, fmt, args...) __undefined_function__
 
 #define NOMEMORY_TRACE(__TAG) \
